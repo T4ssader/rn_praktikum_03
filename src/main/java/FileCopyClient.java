@@ -1,5 +1,5 @@
 /* FileCopyClient.java
- Version 1.0 - Erste funktionsfähige Version.
+ Version 1.1 - Erste funktionsfähige Version.
  Praktikum 3 Rechnernetze BAI4 HAW Hamburg
  Autoren:
  */
@@ -34,7 +34,6 @@ public class FileCopyClient extends Thread {
   private Queue<FCpacket> ackQueue;
   private long estimatedRTT = 100000000L; // initial RTT estimation
   private long devRTT = 0; // deviation of RTT
-  private FileInputStream fileInputStream;
   private boolean transferComplete = false;
   private AckReceiver ackReceiver;
   private final Object lock = new Object(); // Synchronization lock
@@ -64,31 +63,32 @@ public class FileCopyClient extends Thread {
       ackReceiver = new AckReceiver();
       ackReceiver.start();
 
-      fileInputStream = new FileInputStream(sourcePath);
-      byte[] fileBuffer = new byte[UDP_PACKET_SIZE - HEADER_SIZE];
-      int bytesRead;
+      try (FileInputStream fileInputStream = new FileInputStream(sourcePath)) {
+        byte[] fileBuffer = new byte[UDP_PACKET_SIZE - HEADER_SIZE];
+        int bytesRead;
 
-      while ((bytesRead = fileInputStream.read(fileBuffer)) != -1) {
-        while (nextSeqNum >= sendBase + windowSize) {
-          // wait if the window is full
+        while ((bytesRead = fileInputStream.read(fileBuffer)) != -1) {
+          synchronized (lock) {
+            while (nextSeqNum >= sendBase + windowSize) {
+              lock.wait(); // Wait if the window is full
+            }
+          }
+
+          FCpacket packet = new FCpacket(nextSeqNum, fileBuffer, bytesRead);
+          sendPacket(packet);
+          nextSeqNum++;
         }
 
-        FCpacket packet = new FCpacket(nextSeqNum, fileBuffer, bytesRead);
-        sendPacket(packet);
-        nextSeqNum++;
-      }
-
-      // wait for all packets to be acknowledged
-      synchronized (lock) {
-        while (sendBase < nextSeqNum) {
-          lock.wait(); // Wait for signal from AckReceiver
+        // wait for all packets to be acknowledged
+        synchronized (lock) {
+          while (sendBase < nextSeqNum) {
+            lock.wait(); // Wait for signal from AckReceiver
+          }
         }
+
+        // Indicate that the transfer is complete
+        transferComplete = true;
       }
-
-      // Indicate that the transfer is complete
-      transferComplete = true;
-
-      fileInputStream.close();
 
       // Close the socket to unblock the AckReceiver thread
       clientSocket.close();
@@ -152,10 +152,10 @@ public class FileCopyClient extends Thread {
   }
 
   public void computeTimeoutValue(long sampleRTT) {
-    long alpha = 1 / 8;
-    long beta = 1 / 4;
-    estimatedRTT = (1 - alpha) * estimatedRTT + alpha * sampleRTT;
-    devRTT = (1 - beta) * devRTT + beta * Math.abs(sampleRTT - estimatedRTT);
+    double alpha = 0.125;
+    double beta = 0.25;
+    estimatedRTT = (long) ((1 - alpha) * estimatedRTT + alpha * sampleRTT);
+    devRTT = (long) ((1 - beta) * devRTT + beta * Math.abs(sampleRTT - estimatedRTT));
     timeoutValue = estimatedRTT + 4 * devRTT;
   }
 
@@ -220,7 +220,7 @@ public class FileCopyClient extends Thread {
     }
   }
 
-  public static void main(String argv[]) throws Exception {
+  public static void main(String[] argv) throws Exception {
     if (argv.length != 5) {
       System.out.println("Usage: java FileCopyClient <Server> <SourcePath> <DestPath> <WindowSize> <ErrorRate>");
       System.exit(1);
