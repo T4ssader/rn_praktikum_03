@@ -1,5 +1,5 @@
 /* FileCopyClient.java
- Version 1.1 - Erste funktionsfähige Version.
+ Version 1.2 - tracking
  Praktikum 3 Rechnernetze BAI4 HAW Hamburg
  Autoren:
  */
@@ -38,6 +38,15 @@ public class FileCopyClient extends Thread {
   private AckReceiver ackReceiver;
   private final Object lock = new Object(); // Synchronization lock
 
+  // -------- Tracking
+  private boolean outputTrackingInfo = true;
+  private long startTime;
+  private long totalTimeForFile;
+  private int totalPacketsSentMultipleTimes = 0;
+  private int totalReceivedAckConfirmations = 0;
+  private long totalRTT = 0;
+  private int ackCount = 0;
+
   // Constructor
   public FileCopyClient(String serverArg, String sourcePathArg,
                         String destPathArg, String windowSizeArg, String errorRateArg) {
@@ -49,6 +58,7 @@ public class FileCopyClient extends Thread {
   }
 
   public void runFileCopyClient() {
+    startTime = System.currentTimeMillis();
     try {
       clientSocket = new DatagramSocket();
       serverAddress = InetAddress.getByName(servername);
@@ -90,11 +100,18 @@ public class FileCopyClient extends Thread {
         transferComplete = true;
       }
 
+      // Stop tracking
+      totalTimeForFile = System.currentTimeMillis() - startTime;
+
       // Close the socket to unblock the AckReceiver thread
       clientSocket.close();
 
       // Wait for the AckReceiver to finish
       ackReceiver.join();
+
+      if (outputTrackingInfo) {
+        printTrackingInfo();
+      }
 
     } catch (Exception e) {
       e.printStackTrace();
@@ -145,6 +162,7 @@ public class FileCopyClient extends Thread {
       FCpacket packet = sendBuffer.get(seqNum);
       if (packet != null && !packet.isValidACK()) {
         sendPacket(packet);
+        totalPacketsSentMultipleTimes++;
       }
     } catch (IOException e) {
       e.printStackTrace();
@@ -174,6 +192,14 @@ public class FileCopyClient extends Thread {
     if (TEST_OUTPUT_MODE) {
       System.err.printf("%,d %s: %s\n", System.nanoTime(), Thread.currentThread().getName(), out);
     }
+  }
+
+  private void printTrackingInfo() {
+    System.out.println("Tracking Information:");
+    System.out.println("Total time for file transfer: " + totalTimeForFile + " ms");
+    System.out.println("Total packets sent multiple times: " + totalPacketsSentMultipleTimes);
+    System.out.println("Total received ACK confirmations: " + totalReceivedAckConfirmations);
+    System.out.println("Average RTT of all ACKs: " + (ackCount > 0 ? totalRTT / ackCount : 0) + " ns");
   }
 
   private class AckReceiver extends Thread {
@@ -208,6 +234,10 @@ public class FileCopyClient extends Thread {
               }
               lock.notifyAll(); // Notify main thread
             }
+
+            totalReceivedAckConfirmations++;
+            totalRTT += sampleRTT;
+            ackCount++;
           }
 
           if (transferComplete && sendBuffer.isEmpty()) {
@@ -226,6 +256,7 @@ public class FileCopyClient extends Thread {
       System.exit(1);
     }
     FileCopyClient myClient = new FileCopyClient(argv[0], argv[1], argv[2], argv[3], argv[4]);
+    myClient.outputTrackingInfo = true; // Enable tracking output
     myClient.runFileCopyClient();
   }
 }
